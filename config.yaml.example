@@ -1,0 +1,57 @@
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+
+# 数据接收配置
+receiver:
+  path: "/receive_brt_data"
+
+  # 认证配置
+  auth:
+    enabled: true
+    query_param: "auth_token"        # URL参数名
+    header: "Authorization"           # HTTP头名
+    valid_tokens:                     # 有效token列表
+      - "your-secret-token-123"
+
+# 转发配置
+forwarder:
+  # 转发目标列表
+  targets:
+    - url: "http://192.168.0.120/post_data"
+      timeout: 5                      # 超时时间（秒）
+    - url: "http://192.168.0.121/api/data?abc=123"
+      timeout: 5
+
+  # 重试配置
+  retry:
+    enabled: true
+    max_attempts: 1                   # 失败后重试次数
+
+# 缓存配置
+cache:
+  file_path: "./data/cache.json"
+
+  # 需要缓存的特殊指标
+  special_metrics:
+    - co2
+    - hcho
+    - lux
+    - uva_class
+    - uva_raw
+    - voc
+
+  # 无效值模式（大小写不敏感）
+  invalid_patterns:
+    - "FFFF"
+    - "FFFE"
+
+# 日志配置
+logging:
+  level: "INFO"                       # DEBUG, INFO, WARNING, ERROR
+  file_path: "./logs/forwarder.log"
+  max_bytes: 10485760                 # 10MB
+  backup_count: 7                     # 保留7个备份文件
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
