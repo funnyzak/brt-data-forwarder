@@ -6,17 +6,17 @@
 
 一个轻量级的数据转发服务器，专门设计用于接收专有格式的环境传感器数据，处理特殊指标的智能缓存逻辑，并转发到多个目标服务器。
 
-## ✨ 核心特性
+## 核心特性
 
-- 🔄 **智能数据转发** - 接收专有格式传感器数据并转发到多个目标服务器
-- 🧠 **智能缓存管理** - 自动处理无效值（FFFF、FFFE），使用上次有效值替换
-- 🔐 **灵活认证机制** - 支持URL参数和HTTP头两种认证方式
-- 📊 **设备数据查询** - 提供RESTful API查询设备缓存数据
-- 📝 **完整日志系统** - 支持日志轮转和详细的操作记录
-- ⚡ **高可靠性** - 串行转发、重试机制、异常容错处理
-- 🎯 **零配置启动** - 提供完整的配置示例，开箱即用
+- **智能数据转发** - 接收专有格式传感器数据并转发到多个目标服务器
+- **智能缓存管理** - 自动处理无效值（FFFF、FFFE），使用上次有效值替换
+- **灵活认证机制** - 支持URL参数和HTTP头两种认证方式
+- **设备数据查询** - 提供RESTful API查询设备缓存数据
+- **完整日志系统** - 支持日志轮转和详细的操作记录
+- **高可靠性** - 串行转发、重试机制、异常容错处理
+- **零配置启动** - 提供完整的配置示例，开箱即用
 
-## 🚀 快速开始
+## 快速开始
 
 ### 环境要求
 
@@ -55,7 +55,7 @@ python forwarder.py -c /path/to/config.yaml
 python forwarder.py --version
 ```
 
-## 🔧 开发工作流
+## 开发工作流
 
 ### 本地开发环境搭建
 
@@ -80,7 +80,7 @@ cp config.yaml.example config.dev.yaml
 python forwarder.py -c config.dev.yaml
 ```
 
-## 📁 项目结构
+## 项目结构
 
 ```
 brt-cloud-data-forwarder/
@@ -269,7 +269,44 @@ logging:
 }
 ```
 
-## 🧪 测试指南
+## 故障排除
+
+### 常见问题
+
+1. **端口被占用**
+   ```bash
+   # 修改配置文件中的端口
+   server:
+     port: 8081
+   ```
+
+2. **认证失败 (401)**
+   - 检查 `config.yaml` 中的 token 配置
+   - 确认请求中包含正确的认证信息
+
+3. **转发失败**
+   - 检查目标URL是否可访问
+   - 查看日志文件获取详细错误信息
+   - 确认网络连接正常
+
+4. **缓存文件损坏**
+   - 系统会自动重建空缓存
+   - 不影响服务器正常运行
+
+### 日志查看
+
+```bash
+# 查看最新日志
+tail -f logs/forwarder.log
+
+# 查看错误日志
+grep ERROR logs/forwarder.log
+
+# 查看转发记录
+grep "Forward" logs/forwarder.log
+```
+
+## 测试指南
 
 <details>
 <summary><strong>快速测试</strong></summary>
@@ -367,45 +404,7 @@ wrk -t12 -c400 -d30s -s post.lua http://localhost:8080/receive_brt_data
 </details>
 
 
-
-## 🔧 故障排除
-
-### 常见问题
-
-1. **端口被占用**
-   ```bash
-   # 修改配置文件中的端口
-   server:
-     port: 8081
-   ```
-
-2. **认证失败 (401)**
-   - 检查 `config.yaml` 中的 token 配置
-   - 确认请求中包含正确的认证信息
-
-3. **转发失败**
-   - 检查目标URL是否可访问
-   - 查看日志文件获取详细错误信息
-   - 确认网络连接正常
-
-4. **缓存文件损坏**
-   - 系统会自动重建空缓存
-   - 不影响服务器正常运行
-
-### 日志查看
-
-```bash
-# 查看最新日志
-tail -f logs/forwarder.log
-
-# 查看错误日志
-grep ERROR logs/forwarder.log
-
-# 查看转发记录
-grep "Forward" logs/forwarder.log
-```
-
-## 🚀 部署指南
+## 部署指南
 
 <details>
 <summary><strong>生产环境部署</strong></summary>
