@@ -23,7 +23,7 @@
 
 ### 主要类和方法
 
-#### DataForwarder 类 (`forwarder.py:23`)
+#### DataForwarder 类
 ```python
 class DataForwarder:
     """数据转发服务器主类"""
@@ -32,7 +32,11 @@ class DataForwarder:
         # 初始化配置、Flask应用、日志系统
 
     def _load_config(self, config_path):
-        # 加载YAML配置文件
+        # 加载YAML配置文件 + 环境变量覆盖
+
+    def _apply_env_overrides(self, config):
+        # 应用环境变量覆盖配置（新增功能）
+        # 支持 BRT_ 前缀的环境变量，双下划线表示层级
 
     def _setup_logging(self):
         # 配置日志系统（控制台+文件）
@@ -43,34 +47,85 @@ class DataForwarder:
 
 ### 核心处理流程
 
-#### 数据接收处理 (`forwarder.py:112-153`)
+#### 数据接收处理
 1. **认证检查** - `_authenticate()`
 2. **JSON解析验证** - 数据格式验证
 3. **数据处理** - `_process_data()` 处理特殊指标缓存
 4. **数据转发** - `_forward_data()` 串行转发到多个目标
 5. **响应返回** - 返回处理结果
 
-#### 智能缓存机制 (`forwarder.py:214-254`)
+#### 智能缓存机制
 ```python
 def _process_data(self, input_data):
     """
-    核心缓存逻辑：
-    1. 遍历所有设备
-    2. 检查特殊指标（co2、hcho、lux等）
-    3. 如果值为无效模式（FFFF、FFFE）：
-       - 从缓存获取上次有效值替换
-    4. 如果值为有效值：
-       - 更新缓存
+    增强的缓存逻辑：
+    1. 检查 processing.enabled 配置
+    2. 如果启用处理：
+       - 创建数据副本进行缓存值替换
+       - 对无效值使用缓存值替换
+    3. 如果禁用处理：
+       - 直接使用原始数据进行转发
+       - 但仍需更新缓存以记录有效值
+    4. 无论是否启用处理，都更新缓存系统
     """
 ```
 
-#### 转发逻辑 (`forwarder.py:323-385`)
+#### 数据处理开关逻辑
+```python
+# 数据处理控制
+processing_enabled = self.config.get('processing', {}).get('enabled', True)
+
+if processing_enabled:
+    # 启用数据处理：创建副本，替换无效值
+    processed_data = deepcopy(input_data)
+    # 进行缓存值替换逻辑
+else:
+    # 禁用数据处理：直接使用原始数据
+    processed_data = input_data
+    # 跳过值替换，但仍更新缓存
+```
+
+#### 转发逻辑
 - **串行转发** - 逐个目标发送数据
 - **重试机制** - 支持配置重试次数
 - **超时控制** - 每个目标独立的超时设置
 - **结果记录** - 详细的转发结果统计
 
 ## 关键配置理解
+
+### 配置系统架构
+
+#### 环境变量覆盖机制 (`forwarder.py:70-112`)
+系统支持三层配置优先级：**环境变量 > 配置文件 > 默认值**
+
+```python
+def _apply_env_overrides(self, config):
+    """
+    环境变量应用逻辑：
+    1. 遍历所有以 BRT_ 开头的环境变量
+    2. 移除前缀，转换为小写
+    3. 使用双下划线分割层级结构
+    4. 智能类型转换（布尔、整数、字符串）
+    5. 递归设置嵌套配置值
+    """
+```
+
+#### 环境变量映射规则
+```bash
+# 环境变量 → 配置路径
+BRT_SERVER__PORT=8080        → server.port = 8080
+BRT_PROCESSING__ENABLED=false → processing.enabled = false
+BRT_CACHE__SPECIAL_METRICS__0=co2 → cache.special_metrics[0] = "co2"
+```
+
+#### 数据处理配置
+```yaml
+# 新增数据处理控制配置
+processing:
+  enabled: true              # 是否启用数据处理
+                            # true: 无效值使用缓存替换
+                            # false: 直接转发原始数据（仍更新缓存）
+```
 
 ### config.yaml 核心配置项
 
@@ -186,6 +241,20 @@ forwarder:
       # 可扩展：headers、认证等配置
 ```
 
+#### 4. 使用环境变量覆盖配置
+```bash
+# 开发环境快速配置
+export BRT_PROCESSING__ENABLED=false
+export BRT_LOGGING__LEVEL=DEBUG
+export BRT_SERVER__DEBUG=true
+
+# 生产环境配置
+export BRT_SERVER__DEBUG=false
+export BRT_PROCESSING__ENABLED=true
+export BRT_FORWARDER__TARGETS__0__URL=https://prod-api.example.com/data
+```
+
+
 ### 错误处理策略
 
 #### 异常类型和处理
@@ -238,12 +307,24 @@ python test_client.py
      level: "DEBUG"
    ```
 
-2. **查看实时日志**
+2. **使用环境变量快速调试**
+   ```bash
+   # 禁用数据处理，查看原始数据
+   export BRT_PROCESSING__ENABLED=false
+
+   # 开启详细日志
+   export BRT_LOGGING__LEVEL=DEBUG
+
+   # 启动服务
+   python forwarder.py
+   ```
+
+3. **查看实时日志**
    ```bash
    tail -f logs/forwarder.log
    ```
 
-3. **使用curl测试接口**
+4. **使用curl测试接口**
    ```bash
    curl -X POST http://localhost:8080/receive_brt_data \
         -H "Content-Type: application/json" \
@@ -290,6 +371,32 @@ python test_client.py
 ### 3. 认证相关问题
 **问题**: 401认证失败
 **解决**: 检查token配置，确认认证方式（参数/头）
+
+### 4. 环境变量相关问题
+**问题**: 环境变量不生效
+**解决**:
+- 确认变量名以 `BRT_` 开头
+- 检查层级分隔符使用双下划线 `__`
+- 验证环境变量是否正确导出：`env | grep BRT_`
+
+**问题**: 环境变量类型转换错误
+**解决**:
+- 布尔值使用 `true/false`、`1/0`、`yes/no`、`on/off`
+- 整数值确保可以转换为数字
+- 字符串值会自动保持原样
+
+### 5. 数据处理相关问题
+**问题**: 数据处理开关不生效
+**解决**:
+- 检查配置文件中 `processing.enabled` 设置
+- 验证环境变量 `BRT_PROCESSING__ENABLED` 值
+- 重启服务使配置生效
+
+**问题**: 禁用数据处理后仍看到缓存值替换
+**解决**:
+- 确认 `processing.enabled: false` 或环境变量设置正确
+- 查看日志确认数据处理状态
+- 注意：缓存更新仍然会发生，只是不替换转发数据
 
 ## 代码维护建议
 

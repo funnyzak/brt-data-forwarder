@@ -44,7 +44,7 @@ class DataForwarder:
         self._register_routes()
 
     def _load_config(self, config_path):
-        """加载配置文件
+        """加载配置文件，支持环境变量覆盖
 
         Args:
             config_path: 配置文件路径
@@ -55,6 +55,9 @@ class DataForwarder:
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
+
+            # 应用环境变量覆盖
+            config = self._apply_env_overrides(config)
             return config
         except FileNotFoundError:
             print(f"配置文件不存在: {config_path}")
@@ -63,6 +66,116 @@ class DataForwarder:
         except yaml.YAMLError as e:
             print(f"配置文件格式错误: {e}")
             sys.exit(1)
+
+    def _apply_env_overrides(self, config):
+        """应用环境变量覆盖配置
+
+        环境变量命名规则: BRT_ 前缀 + 双下划线层级
+        例如: BRT_SERVER__PORT=8080, BRT_PROCESSING__ENABLED=false
+
+        Args:
+            config: 原始配置字典
+
+        Returns:
+            dict: 应用环境变量覆盖后的配置字典
+        """     
+        def convert_value(value, reference_value=None):
+            """智能类型转换
+            
+            Args:
+                value: 要转换的字符串值
+                reference_value: 参考值，用于类型推断
+            """
+            # 如果有参考值，根据其类型转换
+            if reference_value is not None:
+                if isinstance(reference_value, bool):
+                    return str(value).lower() in ('true', '1', 'yes', 'on')
+                elif isinstance(reference_value, int):
+                    try:
+                        return int(value)
+                    except ValueError:
+                        self.logger.warning(f"无法将 '{value}' 转换为 int，保持字符串类型")
+                        return value
+                elif isinstance(reference_value, float):
+                    try:
+                        return float(value)
+                    except ValueError:
+                        self.logger.warning(f"无法将 '{value}' 转换为 float，保持字符串类型")
+                        return value
+            
+            # 无参考值时，尝试自动推断类型
+            # 布尔值
+            if value.lower() in ('true', 'false', 'yes', 'no', 'on', 'off'):
+                return value.lower() in ('true', 'yes', 'on', '1')
+            
+            # 整数
+            try:
+                if '.' not in value:
+                    return int(value)
+            except ValueError:
+                pass
+            
+            # 浮点数
+            try:
+                return float(value)
+            except ValueError:
+                pass
+            
+            # None 值
+            if value.lower() in ('null', 'none', ''):
+                return None
+            
+            # 默认返回字符串
+            return value
+
+        def set_nested_value(d, key_path, value):
+            """在嵌套字典中设置值
+            
+            Args:
+                d: 目标字典
+                key_path: 点分隔的键路径（小写）
+                value: 要设置的值
+            """
+            keys = key_path.split('__')
+            current = d
+
+            # 导航到最后一级的父级
+            for i, key in enumerate(keys[:-1]):
+                if key not in current:
+                    current[key] = {}
+                elif not isinstance(current[key], dict):
+                    # 中间节点不是字典，无法继续
+                    return False
+                current = current[key]
+
+            # 设置最终值
+            final_key = keys[-1]
+            reference_value = current.get(final_key)
+            converted_value = convert_value(value, reference_value)
+            
+            old_value = current.get(final_key, '<不存在>')
+            current[final_key] = converted_value
+            
+            self.logger.info(
+                f"环境变量覆盖配置: {key_path} = {converted_value} "
+                f"(原值: {old_value}, 类型: {type(converted_value).__name__})"
+            )
+            return True
+
+        # 遍历所有环境变量，找到以 BRT_ 开头的变量
+        override_count = 0
+        for env_key, env_value in os.environ.items():
+            if env_key.startswith('BRT_'):
+                # 移除 BRT_ 前缀，转换为小写
+                config_path = env_key[4:].lower()
+                
+                if set_nested_value(config, config_path, env_value):
+                    override_count += 1
+        
+        if override_count > 0:
+            self.logger.info(f"共应用 {override_count} 个环境变量配置覆盖")
+        
+        return config
 
     def _setup_logging(self):
         """设置日志系统"""
@@ -133,7 +246,12 @@ class DataForwarder:
                 client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
                 seq_no = input_data.get('seq_no', 'N/A')
                 device_count = len(input_data.get('devices', []))
-                self.logger.info(f"Received data from {client_ip}, seq_no={seq_no}, devices={device_count}")
+
+                # 检查数据处理状态
+                processing_enabled = self.config.get('processing', {}).get('enabled', True)
+                processing_status = "enabled" if processing_enabled else "disabled"
+
+                self.logger.info(f"Received data from {client_ip}, seq_no={seq_no}, devices={device_count}, processing={processing_status}")
 
                 # 数据处理
                 processed_data = self._process_data(input_data)
@@ -220,11 +338,23 @@ class DataForwarder:
         Returns:
             dict: 处理后的数据
         """
-        processed_data = deepcopy(input_data)
+        # 检查是否启用数据处理
+        processing_config = self.config.get('processing', {})
+        processing_enabled = processing_config.get('enabled', True)
+
+        # 创建处理后的数据副本
+        if processing_enabled:
+            processed_data = deepcopy(input_data)
+        else:
+            # 如果不处理数据，直接使用原始数据，但仍需要创建副本用于缓存更新
+            processed_data = input_data
+
+        # 缓存配置
         cache_config = self.config.get('cache', {})
         special_metrics = cache_config.get('special_metrics', [])
         invalid_patterns = cache_config.get('invalid_patterns', ['FFFF', 'FFFE'])
 
+        # 无论是否启用数据处理，都需要更新缓存
         for device in processed_data.get('devices', []):
             ble_addr = device.get('ble_addr')
             scan_time = device.get('scan_time', 0)
@@ -238,16 +368,21 @@ class DataForwarder:
 
                     # 检查是否为无效值（大小写不敏感）
                     if value.upper() in [p.upper() for p in invalid_patterns]:
-                        # 尝试从缓存获取
-                        cached = self._get_cached_metric(ble_addr, metric)
-                        if cached:
-                            device[metric] = cached['value']
-                            self.logger.info(f"Used cached value for {ble_addr}.{metric}: {cached['value']}")
+                        # 无效值处理
+                        if processing_enabled:
+                            # 只有启用数据处理时才使用缓存替换无效值
+                            cached = self._get_cached_metric(ble_addr, metric)
+                            if cached:
+                                device[metric] = cached['value']
+                                self.logger.info(f"Used cached value for {ble_addr}.{metric}: {cached['value']}")
+                            else:
+                                # 保持原值 FFFF
+                                self.logger.info(f"No cache available for {ble_addr}.{metric}, keeping invalid value: {value}")
                         else:
-                            # 保持原值 FFFF
-                            self.logger.info(f"No cache available for {ble_addr}.{metric}, keeping invalid value: {value}")
+                            # 不处理数据时，仅记录日志
+                            self.logger.info(f"Data processing disabled, keeping invalid value for {ble_addr}.{metric}: {value}")
                     else:
-                        # 有效值，更新缓存
+                        # 有效值，总是更新缓存
                         self._update_cache(ble_addr, metric, value, scan_time)
                         self.logger.info(f"Updated cache for {ble_addr}.{metric}: {value}")
 

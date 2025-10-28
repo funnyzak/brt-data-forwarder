@@ -16,6 +16,12 @@ receiver:
     valid_tokens:                     # 有效token列表
       - "your-secret-token-123"
 
+
+# 数据处理配置
+processing:
+  enabled: true                      # 是否启用数据处理（默认开启）
+                                      # false=直接转发原始数据，但仍更新缓存
+
 # 转发配置
 forwarder:
   # 转发目标列表

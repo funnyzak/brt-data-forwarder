@@ -190,6 +190,75 @@ brt-data-forwarder/
 
 ## 配置说明
 
+### 环境变量支持
+
+BRT Data Forwarder 支持使用环境变量覆盖配置文件设置，优先级规则如下：
+
+**优先级**: 环境变量 > 配置文件 > 默认值
+
+#### 环境变量命名规则
+
+- **前缀**: 所有环境变量必须以 `BRT_` 开头
+- **层级结构**: 使用双下划线 `__` 表示配置层级
+- **大小写**: 环境变量名使用大写，配置键名使用小写
+
+#### 环境变量示例
+
+```bash
+# 服务器配置覆盖
+export BRT_SERVER__HOST=0.0.0.0
+export BRT_SERVER__PORT=8080
+export BRT_SERVER__DEBUG=false
+
+# 数据处理开关
+export BRT_PROCESSING__ENABLED=false
+
+# 转发目标配置
+export BRT_FORWARDER__TARGETS__0__URL=http://example.com/api/data
+export BRT_FORWARDER__TARGETS__0__TIMEOUT=10
+
+# 认证配置
+export BRT_RECEIVER__AUTH__ENABLED=true
+export BRT_RECEIVER__AUTH__QUERY_PARAM=token
+
+# 日志配置
+export BRT_LOGGING__LEVEL=DEBUG
+export BRT_LOGGING__FILE_PATH=./logs/custom.log
+
+# 缓存配置
+export BRT_CACHE__FILE_PATH=./data/custom_cache.json
+```
+
+#### 数组配置说明
+
+对于数组类型的配置（如 `forwarder.targets`），使用数字索引：
+
+```yaml
+# 配置文件中的数组
+forwarder:
+  targets:
+    - url: "http://target1.com"
+      timeout: 5
+    - url: "http://target2.com"
+      timeout: 10
+```
+
+```bash
+# 对应的环境变量
+export BRT_FORWARDER__TARGETS__0__URL=http://target1.com
+export BRT_FORWARDER__TARGETS__0__TIMEOUT=5
+export BRT_FORWARDER__TARGETS__1__URL=http://target2.com
+export BRT_FORWARDER__TARGETS__1__TIMEOUT=10
+```
+
+#### 数据类型自动转换
+
+系统会自动根据配置文件中的原始数据类型转换环境变量值：
+
+- **布尔值**: `true`, `1`, `yes`, `on` → `True`，其他值 → `False`
+- **整数**: 尝试转换为整数，失败则保持字符串
+- **字符串**: 直接使用字符串值
+
 ### 完整配置示例
 
 ```yaml
@@ -208,6 +277,11 @@ receiver:
     header: "Authorization"       # HTTP头名
     valid_tokens:                # 有效token列表
       - "your-secret-token-123"
+
+# 数据处理配置
+processing:
+  enabled: true          # 是否启用数据处理（默认开启）
+                        # false=直接转发原始数据，但仍更新缓存
 
 # 转发配置
 forwarder:
@@ -254,6 +328,40 @@ logging:
    - 如果是无效值，从缓存获取上次有效值替换
    - 如果是有效值，更新缓存
 5. **数据转发** - 将处理后的数据转发到目标服务器
+
+### 数据处理开关
+
+系统支持通过 `processing.enabled` 配置控制是否进行数据处理：
+
+#### 启用数据处理（默认）
+```yaml
+processing:
+  enabled: true
+```
+- **行为**: 对无效值使用缓存值替换后转发
+- **适用场景**: 需要保证数据完整性和连续性的业务场景
+
+#### 禁用数据处理
+```yaml
+processing:
+  enabled: false
+```
+- **行为**: 直接转发原始数据（包含无效值），但仍然更新缓存
+- **适用场景**:
+  - 需要原始数据进行分析的场景
+  - 调试和测试环境
+  - 上游系统需要识别无效值的场景
+
+#### 环境变量控制
+```bash
+# 临时禁用数据处理
+export BRT_PROCESSING__ENABLED=false
+
+# 启用数据处理
+export BRT_PROCESSING__ENABLED=true
+```
+
+**注意**: 无论是否启用数据处理，缓存系统都会正常工作，确保有效值始终被记录。
 
 ### 缓存数据结构
 
@@ -376,6 +484,51 @@ curl -X POST http://localhost:8080/receive_brt_data \
 ```bash
 curl http://localhost:8080/api/device/E7E8F5F8C9A4 \
      -H "Authorization: your-secret-token-123"
+```
+
+### 使用环境变量的部署示例
+
+**Docker 部署示例：**
+```bash
+# 使用环境变量覆盖配置
+docker run -d \
+  -p 8080:8080 \
+  -e BRT_SERVER__PORT=8080 \
+  -e BRT_PROCESSING__ENABLED=false \
+  -e BRT_FORWARDER__TARGETS__0__URL=http://external-api.com/data \
+  -e BRT_LOGGING__LEVEL=INFO \
+  brt-data-forwarder:latest
+```
+
+**生产环境部署脚本：**
+```bash
+#!/bin/bash
+
+# 设置环境变量
+export BRT_SERVER__HOST=0.0.0.0
+export BRT_SERVER__PORT=8080
+export BRT_SERVER__DEBUG=false
+export BRT_PROCESSING__ENABLED=true
+export BRT_FORWARDER__TARGETS__0__URL=https://production-api.example.com/data
+export BRT_FORWARDER__TARGETS__0__TIMEOUT=10
+export BRT_LOGGING__LEVEL=INFO
+export BRT_LOGGING__FILE_PATH=/var/log/brt-forwarder/forwarder.log
+
+# 启动服务
+python forwarder.py
+```
+
+**开发环境快速测试：**
+```bash
+# 临时禁用数据处理进行调试
+export BRT_PROCESSING__ENABLED=false
+export BRT_LOGGING__LEVEL=DEBUG
+
+# 使用不同的转发目标进行测试
+export BRT_FORWARDER__TARGETS__0__URL=http://localhost:9000/test-endpoint
+
+# 启动服务
+python forwarder.py
 ```
 
 ### 使用 Postman 测试
