@@ -1,4 +1,4 @@
-# BRT Cloud Data Forwarder
+# BRT Data Forwarder
 
 [![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)](https://flask.palletsprojects.com/)
@@ -61,8 +61,8 @@ python forwarder.py --version
 
 ```bash
 # 1. 克隆项目
-git clone git@github.com:funnyzak/brt-cloud-data-forword.git
-cd brt-cloud-data-forwarder
+git clone git@github.com:funnyzak/brt-data-forwarder.git
+cd brt-data-forwarder
 
 # 2. 创建虚拟环境
 python -m venv venv
@@ -83,7 +83,7 @@ python forwarder.py -c config.dev.yaml
 ## 项目结构
 
 ```
-brt-cloud-data-forwarder/
+brt-data-forwarder/
 ├── forwarder.py              # 主程序文件
 ├── test_client.py            # 测试客户端
 ├── config.yaml.example       # 配置文件模板
@@ -399,246 +399,6 @@ ab -n 1000 -c 10 -H "Authorization: your-secret-token-123" \
 
 # 使用 wrk 进行性能测试
 wrk -t12 -c400 -d30s -s post.lua http://localhost:8080/receive_brt_data
-```
-
-</details>
-
-
-## 部署指南
-
-<details>
-<summary><strong>生产环境部署</strong></summary>
-
-### 1. 生产环境配置
-
-```yaml
-# config.prod.yaml
-server:
-  host: "0.0.0.0"
-  port: 8080
-  debug: false
-
-logging:
-  level: "INFO"
-  file_path: "/var/log/forwarder/app.log"
-  max_bytes: 52428800  # 50MB
-  backup_count: 30
-
-cache:
-  file_path: "/var/lib/forwarder/cache.json"
-
-# 生产环境转发目标
-forwarder:
-  targets:
-    - url: "https://api.production.com/data"
-      timeout: 10
-    - url: "https://backup.production.com/data"
-      timeout: 10
-  retry:
-    enabled: true
-    max_attempts: 3
-
-# 生产环境认证
-receiver:
-  auth:
-    enabled: true
-    valid_tokens:
-      - "${AUTH_TOKEN_1}"
-      - "${AUTH_TOKEN_2}"
-```
-
-### 2. 系统服务配置
-
-```ini
-# /etc/systemd/system/data-forwarder.service
-[Unit]
-Description=BRT Cloud Data Forwarder
-After=network.target
-
-[Service]
-Type=simple
-User=forwarder
-Group=forwarder
-WorkingDirectory=/opt/data-forwarder
-ExecStart=/opt/data-forwarder/venv/bin/python forwarder.py -c config.prod.yaml
-Restart=always
-RestartSec=10
-Environment=AUTH_TOKEN_1=your-production-token-1
-Environment=AUTH_TOKEN_2=your-production-token-2
-
-# 安全配置
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/forwarder /var/log/forwarder
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-# 创建用户和目录
-sudo useradd -r -s /bin/false forwarder
-sudo mkdir -p /opt/data-forwarder
-sudo mkdir -p /var/lib/forwarder
-sudo mkdir -p /var/log/forwarder
-sudo chown -R forwarder:forwarder /opt/data-forwarder
-sudo chown -R forwarder:forwarder /var/lib/forwarder
-sudo chown -R forwarder:forwarder /var/log/forwarder
-
-# 复制文件
-sudo cp -r . /opt/data-forwarder/
-sudo chown -R forwarder:forwarder /opt/data-forwarder
-
-# 启用和启动服务
-sudo systemctl daemon-reload
-sudo systemctl enable data-forwarder
-sudo systemctl start data-forwarder
-sudo systemctl status data-forwarder
-```
-
-### 3. 监控和日志
-
-```bash
-# 查看服务状态
-sudo systemctl status data-forwarder
-
-# 查看实时日志
-sudo journalctl -u data-forwarder -f
-
-# 查看应用日志
-tail -f /var/log/forwarder/app.log
-
-# 查看错误日志
-grep ERROR /var/log/forwarder/app.log
-```
-
-</details>
-
-<details>
-<summary><strong>Docker 部署</strong></summary>
-
-### 1. Dockerfile
-
-```dockerfile
-# Dockerfile
-FROM python:3.9-slim
-
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# 创建应用用户
-RUN useradd -r -s /bin/false forwarder
-
-# 设置工作目录
-WORKDIR /app
-
-# 复制依赖文件
-COPY requirements.txt .
-
-# 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 复制应用代码
-COPY . .
-
-# 创建数据目录
-RUN mkdir -p /app/data /app/logs && \
-    chown -R forwarder:forwarder /app
-
-# 切换到非root用户
-USER forwarder
-
-# 暴露端口
-EXPOSE 8080
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-# 启动命令
-CMD ["python", "forwarder.py"]
-```
-
-### 2. Docker Compose
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  data-forwarder:
-    build: .
-    container_name: brt-data-forwarder
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./config.yaml:/app/config.yaml:ro
-    environment:
-      - AUTH_TOKEN_1=${AUTH_TOKEN_1}
-      - AUTH_TOKEN_2=${AUTH_TOKEN_2}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - forwarder-network
-
-  # 可选：添加Nginx反向代理
-  nginx:
-    image: nginx:alpine
-    container_name: forwarder-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - data-forwarder
-    restart: unless-stopped
-    networks:
-      - forwarder-network
-
-networks:
-  forwarder-network:
-    driver: bridge
-
-volumes:
-  data:
-  logs:
-```
-
-### 3. 环境变量配置
-
-```bash
-# .env 文件
-AUTH_TOKEN_1=your-production-token-1
-AUTH_TOKEN_2=your-production-token-2
-```
-
-### 4. 部署命令
-
-```bash
-# 构建和启动
-docker-compose up -d
-
-# 查看日志
-docker-compose logs -f data-forwarder
-
-# 停止服务
-docker-compose down
-
-# 重新构建
-docker-compose up -d --build
 ```
 
 </details>
