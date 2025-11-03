@@ -3,6 +3,8 @@
 [![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docker Tags](https://img.shields.io/docker/v/funnyzak/brt-data-forwarder?sort=semver&style=flat-square)](https://hub.docker.com/r/funnyzak/brt-data-forwarder/)
+[![Image Size](https://img.shields.io/docker/image-size/funnyzak/brt-data-forwarder)](https://hub.docker.com/r/funnyzak/brt-data-forwarder/)
 
 一个轻量级的数据转发服务器，专门设计用于接收专有格式的环境传感器数据，处理特殊指标的智能缓存逻辑，并转发到多个目标服务器。
 
