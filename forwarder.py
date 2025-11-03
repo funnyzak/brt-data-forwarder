@@ -20,7 +20,227 @@ import yaml
 from flask import Flask, jsonify, request
 
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
+
+
+class MemoryCacheWithPersistence:
+    """内存缓存加定期持久化类
+
+    提供线程安全的内存缓存操作，并定期将缓存数据持久化到磁盘。
+    解决多线程并发访问JSON文件的竞态条件和数据丢失问题。
+    """
+
+    def __init__(self, cache_file_path='./data/cache.json', sync_interval=30, logger=None):
+        """初始化内存缓存
+
+        Args:
+            cache_file_path: 持久化文件路径
+            sync_interval: 自动同步间隔（秒）
+            logger: 日志记录器
+        """
+        self.cache_file_path = cache_file_path
+        self.sync_interval = sync_interval
+        self.logger = logger or logging.getLogger(self.__class__.__name__)
+
+        # 线程安全的内存缓存
+        self._memory_cache = {}
+        self._lock = threading.RLock()
+
+        # 控制变量
+        self._dirty = False  # 标记缓存是否需要持久化
+        self._last_sync = time.time()
+        self._running = True
+
+        # 确保缓存目录存在
+        os.makedirs(os.path.dirname(cache_file_path), exist_ok=True)
+
+        # 启动后台同步线程
+        self._sync_thread = threading.Thread(target=self._background_sync, daemon=True)
+        self._sync_thread.start()
+
+        # 加载现有缓存
+        self._load_from_disk()
+
+        self.logger.info(f"MemoryCache initialized, sync_interval={sync_interval}s, file={cache_file_path}")
+
+    def _load_from_disk(self):
+        """从磁盘加载缓存数据"""
+        try:
+            if os.path.exists(self.cache_file_path):
+                with open(self.cache_file_path, 'r', encoding='utf-8') as f:
+                    self._memory_cache = json.load(f)
+                    self.logger.info(f"Loaded cache from disk: {len(self._memory_cache)} devices")
+            else:
+                self._memory_cache = {}
+                self.logger.info("Cache file not found, starting with empty cache")
+        except Exception as e:
+            self.logger.warning(f"Failed to load cache from disk: {e}")
+            self._memory_cache = {}
+
+    def _save_to_disk(self):
+        """将缓存数据保存到磁盘（原子性写入）"""
+        if not self._dirty:
+            return
+
+        try:
+            # 创建临时文件
+            temp_file = self.cache_file_path + '.tmp'
+
+            # 写入临时文件
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(self._memory_cache, f, indent=2, ensure_ascii=False)
+
+            # 原子性重命名
+            os.replace(temp_file, self.cache_file_path)
+
+            self._dirty = False
+            self._last_sync = time.time()
+
+            device_count = len(self._memory_cache)
+            metric_count = sum(len(metrics) for metrics in self._memory_cache.values())
+            self.logger.debug(f"Cache saved to disk: {device_count} devices, {metric_count} metrics")
+
+        except Exception as e:
+            self.logger.error(f"Failed to save cache to disk: {e}")
+
+    def _background_sync(self):
+        """后台同步线程"""
+        while self._running:
+            try:
+                time.sleep(self.sync_interval)
+
+                with self._lock:
+                    if self._dirty and (time.time() - self._last_sync) >= self.sync_interval:
+                        self._save_to_disk()
+
+            except Exception as e:
+                self.logger.error(f"Background sync error: {e}")
+
+    def get_metric(self, ble_addr, metric):
+        """获取设备的指标值
+
+        Args:
+            ble_addr: 设备BLE地址
+            metric: 指标名称
+
+        Returns:
+            dict or None: 指标数据，包含 value, scan_time, updated_at
+        """
+        with self._lock:
+            return self._memory_cache.get(ble_addr, {}).get(metric)
+
+    def update_metric(self, ble_addr, metric, value, scan_time):
+        """更新设备的指标值
+
+        Args:
+            ble_addr: 设备BLE地址
+            metric: 指标名称
+            value: 指标值
+            scan_time: 采集时间戳
+        """
+        with self._lock:
+            if ble_addr not in self._memory_cache:
+                self._memory_cache[ble_addr] = {}
+
+            self._memory_cache[ble_addr][metric] = {
+                'value': value,
+                'scan_time': scan_time,
+                'updated_at': int(time.time())
+            }
+
+            self._dirty = True
+            self.logger.debug(f"Updated cache: {ble_addr}.{metric} = {value}")
+
+    def get_device_metrics(self, ble_addr):
+        """获取设备的所有指标
+
+        Args:
+            ble_addr: 设备BLE地址
+
+        Returns:
+            dict: 设备的所有指标数据
+        """
+        with self._lock:
+            return self._memory_cache.get(ble_addr, {}).copy()
+
+    def force_sync(self):
+        """强制同步到磁盘"""
+        with self._lock:
+            if self._dirty:
+                self._save_to_disk()
+                self.logger.info("Force sync completed")
+
+    def get_cache_stats(self):
+        """获取缓存统计信息
+
+        Returns:
+            dict: 缓存统计数据
+        """
+        with self._lock:
+            device_count = len(self._memory_cache)
+            metric_count = sum(len(metrics) for metrics in self._memory_cache.values())
+
+            return {
+                'device_count': device_count,
+                'metric_count': metric_count,
+                'dirty': self._dirty,
+                'last_sync': self._last_sync,
+                'uptime': time.time() - self._last_sync if self._dirty else 0
+            }
+
+    def cleanup_expired_data(self, max_age_days=30):
+        """清理过期的缓存数据
+
+        Args:
+            max_age_days: 最大保存天数
+        """
+        current_time = time.time()
+        max_age_seconds = max_age_days * 24 * 3600
+        cleaned_devices = []
+        cleaned_metrics = 0
+
+        with self._lock:
+            devices_to_remove = []
+
+            for ble_addr, metrics in self._memory_cache.items():
+                metrics_to_remove = []
+
+                for metric, data in metrics.items():
+                    age = current_time - data.get('updated_at', 0)
+                    if age > max_age_seconds:
+                        metrics_to_remove.append(metric)
+
+                # 清理过期指标
+                for metric in metrics_to_remove:
+                    del metrics[metric]
+                    cleaned_metrics += 1
+
+                # 如果设备没有指标了，标记设备删除
+                if not metrics:
+                    devices_to_remove.append(ble_addr)
+
+            # 删除空设备
+            for ble_addr in devices_to_remove:
+                del self._memory_cache[ble_addr]
+                cleaned_devices.append(ble_addr)
+
+            if cleaned_devices or cleaned_metrics:
+                self._dirty = True
+                self.logger.info(f"Cleaned expired cache: {cleaned_devices} devices, {cleaned_metrics} metrics")
+
+    def shutdown(self):
+        """优雅关闭缓存系统"""
+        self.logger.info("Shutting down cache system...")
+        self._running = False
+
+        # 强制同步
+        self.force_sync()
+
+        # 等待后台线程结束
+        if self._sync_thread.is_alive():
+            self._sync_thread.join(timeout=5)
+
+        self.logger.info("Cache system shutdown completed")
 
 class DataForwarder:
     """数据转发服务器主类"""
@@ -34,16 +254,39 @@ class DataForwarder:
         self.config = self._load_config(config_path)
         self.app = Flask(__name__)
         self._setup_logging()
-        self._cache_lock = threading.RLock()
 
         # 确保必要的目录存在
         Path("./data").mkdir(exist_ok=True)
         Path("./logs").mkdir(exist_ok=True)
 
+        # 初始化新的缓存系统
+        self._init_cache()
+
         self.logger.info("Data forwarder initialized")
 
         # 注册路由
         self._register_routes()
+
+    def _init_cache(self):
+        """初始化缓存系统"""
+        cache_config = self.config.get('cache', {})
+        cache_type = cache_config.get('type', 'memory')  # 默认使用内存缓存
+
+        if cache_type == 'memory':
+            # 内存缓存配置
+            cache_file_path = cache_config.get('file_path', './data/cache.json')
+            sync_interval = cache_config.get('sync_interval', 30)
+
+            self.cache = MemoryCacheWithPersistence(
+                cache_file_path=cache_file_path,
+                sync_interval=sync_interval,
+                logger=self.logger
+            )
+            self.logger.info(f"Using memory cache with persistence, file={cache_file_path}, interval={sync_interval}s")
+        else:
+            # 其他缓存类型可以在这里扩展（如 Redis、SQLite 等）
+            self.logger.error(f"Unsupported cache type: {cache_type}")
+            raise ValueError(f"Unsupported cache type: {cache_type}")
 
     def _load_config(self, config_path):
         """加载配置文件，支持环境变量覆盖
@@ -390,38 +633,7 @@ class DataForwarder:
 
         return processed_data
 
-    def _load_cache(self):
-        """从JSON文件加载缓存
-
-        Returns:
-            dict: 缓存数据
-        """
-        cache_file = self.config.get('cache', {}).get('file_path', './data/cache.json')
-
-        try:
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            self.logger.warning(f"Cache file corrupted, creating new cache: {e}")
-
-        return {}
-
-    def _save_cache(self, cache_data):
-        """保存缓存到JSON文件
-
-        Args:
-            cache_data: 缓存数据
-        """
-        cache_file = self.config.get('cache', {}).get('file_path', './data/cache.json')
-
-        try:
-            with self._cache_lock:
-                with open(cache_file, 'w', encoding='utf-8') as f:
-                    json.dump(cache_data, f, indent=2, ensure_ascii=False)
-        except IOError as e:
-            self.logger.error(f"Failed to save cache: {e}")
-
+    
     def _get_cached_metric(self, ble_addr, metric):
         """获取缓存的指标值
 
@@ -432,8 +644,7 @@ class DataForwarder:
         Returns:
             dict or None: 缓存的指标数据
         """
-        cache = self._load_cache()
-        return cache.get(ble_addr, {}).get(metric)
+        return self.cache.get_metric(ble_addr, metric)
 
     def _update_cache(self, ble_addr, metric, value, scan_time):
         """更新缓存（线程安全）
@@ -444,18 +655,7 @@ class DataForwarder:
             value: 指标值
             scan_time: 采集时间戳
         """
-        cache = self._load_cache()
-
-        if ble_addr not in cache:
-            cache[ble_addr] = {}
-
-        cache[ble_addr][metric] = {
-            'value': value,
-            'scan_time': scan_time,
-            'updated_at': int(time.time())
-        }
-
-        self._save_cache(cache)
+        self.cache.update_metric(ble_addr, metric, value, scan_time)
 
     def _forward_data(self, data):
         """串行转发数据到多个目标
@@ -531,8 +731,7 @@ class DataForwarder:
             dict or None: 设备数据
         """
         # 从缓存中查找设备
-        cache = self._load_cache()
-        cached_metrics = cache.get(ble_addr, {})
+        cached_metrics = self.cache.get_device_metrics(ble_addr)
 
         if not cached_metrics:
             self.logger.info(f"Device query: {ble_addr}, found=False")
@@ -550,6 +749,16 @@ class DataForwarder:
         self.logger.info(f"Device query: {ble_addr}, found=True")
         return device_data
 
+    def shutdown(self):
+        """优雅关闭服务器"""
+        self.logger.info("Shutting down data forwarder...")
+
+        # 关闭缓存系统
+        if hasattr(self, 'cache'):
+            self.cache.shutdown()
+
+        self.logger.info("Data forwarder shutdown completed")
+
     def run(self):
         """启动服务器"""
         server_config = self.config.get('server', {})
@@ -566,6 +775,9 @@ class DataForwarder:
         except Exception as e:
             self.logger.error(f"Failed to start server: {e}")
             sys.exit(1)
+        finally:
+            # 确保在程序退出时正确关闭缓存
+            self.shutdown()
 
 
 def main():

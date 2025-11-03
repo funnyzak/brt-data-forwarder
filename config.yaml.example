@@ -38,21 +38,32 @@ forwarder:
 
 # 缓存配置
 cache:
+  # 缓存类型（目前支持 memory）
+  type: "memory"
+
+  # 持久化文件路径
   file_path: "./data/cache.json"
 
+  # 自动同步间隔（秒）
+  # 较小的间隔会减少数据丢失风险，但增加I/O操作
+  # 较大的间隔会减少I/O操作，但增加数据丢失风险
+  sync_interval: 30
+
   # 需要缓存的特殊指标
+  # 这些指标的无效值会被上次有效值替换
   special_metrics:
-    - co2
-    - hcho
-    - lux
-    - uva_class
-    - uva_raw
-    - voc
+    - co2        # 二氧化碳浓度
+    - hcho       # 甲醛浓度
+    - lux        # 光照强度
+    - uva_class  # UVA等级
+    - uva_raw    # UVA原始值
+    - voc        # 挥发性有机化合物
 
   # 无效值模式（大小写不敏感）
+  # 当传感器返回这些值时，会使用缓存值替换
   invalid_patterns:
-    - "FFFF"
-    - "FFFE"
+    - "FFFF"     # 无效值模式1
+    - "FFFE"     # 无效值模式2
 
 # 日志配置
 logging:

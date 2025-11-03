@@ -8,20 +8,70 @@
 
 ### 技术栈
 - **Web框架**: Flask 3.0+ - 轻量级Python Web框架
-- **配置管理**: PyYAML - YAML配置文件解析
+- **配置管理**: PyYAML - YAML配置文件解析 + 环境变量覆盖
 - **HTTP客户端**: requests - 用于数据转发
-- **数据存储**: JSON文件 - 简单的缓存存储
+- **缓存系统**: 内存缓存 + 定期持久化 - 高性能线程安全缓存
+- **并发控制**: threading.RLock - 可重入锁确保线程安全
+- **数据存储**: JSON文件 - 持久化备份存储
 - **日志系统**: Python logging + RotatingFileHandler
 
 ### 设计模式
 - **单例模式**: DataForwarder类作为主要服务容器
 - **策略模式**: 认证、转发、缓存处理的策略性设计
-- **模板方法**: 数据处理的标准流程
 - **观察者模式**: 日志记录贯穿整个流程
+- **生产者-消费者模式**: 后台缓存同步线程
+- **代理模式**: 缓存系统代理内存和持久化操作
+- **模板方法**: 数据处理的标准流程
+
+### 新架构特性
+- **线程安全缓存**: MemoryCacheWithPersistence类提供线程安全的内存缓存
+- **智能持久化**: 脏数据标记 + 定期同步 + 原子性写入
+- **并发优化**: 支持多线程并发访问，无竞态条件
+- **环境变量覆盖**: 三层配置优先级：环境变量 > 配置文件 > 默认值
+- **数据处理开关**: 可配置是否启用数据预处理功能
 
 ## 代码结构深度分析
 
 ### 主要类和方法
+
+#### MemoryCacheWithPersistence 类
+```python
+class MemoryCacheWithPersistence:
+    """内存缓存加定期持久化类 - 核心缓存系统"""
+
+    def __init__(self, cache_file_path, sync_interval=30, logger=None):
+        # 初始化内存缓存、线程锁、后台同步线程
+
+    def _load_from_disk(self):
+        # 从磁盘加载缓存数据（启动时执行）
+
+    def _save_to_disk(self):
+        # 原子性写入缓存数据到磁盘
+
+    def _background_sync(self):
+        # 后台同步线程，定期检查并同步脏数据
+
+    def get_metric(self, ble_addr, metric):
+        # 线程安全获取设备指标值
+
+    def update_metric(self, ble_addr, metric, value, scan_time):
+        # 线程安全更新设备指标值，标记脏数据
+
+    def get_device_metrics(self, ble_addr):
+        # 线程安全获取设备所有指标
+
+    def force_sync(self):
+        # 强制同步缓存到磁盘
+
+    def get_cache_stats(self):
+        # 获取缓存统计信息
+
+    def cleanup_expired_data(self, max_age_days=30):
+        # 清理过期缓存数据
+
+    def shutdown(self):
+        # 优雅关闭缓存系统
+```
 
 #### DataForwarder 类
 ```python
@@ -29,14 +79,18 @@ class DataForwarder:
     """数据转发服务器主类"""
 
     def __init__(self, config_path="config.yaml"):
-        # 初始化配置、Flask应用、日志系统
+        # 初始化配置、Flask应用、日志系统、缓存系统
+
+    def _init_cache(self):
+        # 初始化缓存系统（支持多种缓存类型）
 
     def _load_config(self, config_path):
         # 加载YAML配置文件 + 环境变量覆盖
 
     def _apply_env_overrides(self, config):
-        # 应用环境变量覆盖配置（新增功能）
+        # 应用环境变量覆盖配置
         # 支持 BRT_ 前缀的环境变量，双下划线表示层级
+        # 智能类型转换（布尔、整数、浮点数、字符串）
 
     def _setup_logging(self):
         # 配置日志系统（控制台+文件）
@@ -54,20 +108,33 @@ class DataForwarder:
 4. **数据转发** - `_forward_data()` 串行转发到多个目标
 5. **响应返回** - 返回处理结果
 
-#### 智能缓存机制
+#### 高性能缓存机制
 ```python
 def _process_data(self, input_data):
     """
-    增强的缓存逻辑：
-    1. 检查 processing.enabled 配置
+    新的缓存处理逻辑：
+    1. 检查 processing.enabled 配置决定是否进行数据预处理
     2. 如果启用处理：
        - 创建数据副本进行缓存值替换
-       - 对无效值使用缓存值替换
+       - 对无效值从内存缓存获取上次有效值替换
     3. 如果禁用处理：
        - 直接使用原始数据进行转发
-       - 但仍需更新缓存以记录有效值
-    4. 无论是否启用处理，都更新缓存系统
+       - 但仍需更新内存缓存以记录有效值
+    4. 无论是否启用处理，都通过线程安全API更新内存缓存
+    5. 后台线程定期将脏数据同步到磁盘文件
     """
+```
+
+#### 线程安全缓存操作
+```python
+# 获取缓存值（线程安全）
+cached = self.cache.get_metric(ble_addr, metric)
+
+# 更新缓存值（线程安全，自动标记脏数据）
+self.cache.update_metric(ble_addr, metric, value, scan_time)
+
+# 获取设备所有指标（线程安全）
+device_metrics = self.cache.get_device_metrics(ble_addr)
 ```
 
 #### 数据处理开关逻辑
@@ -95,18 +162,19 @@ else:
 
 ### 配置系统架构
 
-#### 环境变量覆盖机制 (`forwarder.py:70-112`)
+#### 环境变量覆盖机制 (`forwarder.py:315-423`)
 系统支持三层配置优先级：**环境变量 > 配置文件 > 默认值**
 
 ```python
 def _apply_env_overrides(self, config):
     """
-    环境变量应用逻辑：
+    增强的环境变量应用逻辑：
     1. 遍历所有以 BRT_ 开头的环境变量
     2. 移除前缀，转换为小写
     3. 使用双下划线分割层级结构
-    4. 智能类型转换（布尔、整数、字符串）
+    4. 智能类型转换（布尔、整数、浮点数、字符串、None）
     5. 递归设置嵌套配置值
+    6. 支持参考值类型推断和自动类型转换
     """
 ```
 
@@ -115,7 +183,22 @@ def _apply_env_overrides(self, config):
 # 环境变量 → 配置路径
 BRT_SERVER__PORT=8080        → server.port = 8080
 BRT_PROCESSING__ENABLED=false → processing.enabled = false
+BRT_CACHE__TYPE=memory       → cache.type = "memory"
+BRT_CACHE__SYNC_INTERVAL=60  → cache.sync_interval = 60
 BRT_CACHE__SPECIAL_METRICS__0=co2 → cache.special_metrics[0] = "co2"
+```
+
+#### 智能类型转换
+```python
+def convert_value(value, reference_value=None):
+    """
+    增强的类型转换逻辑：
+    1. 如果有参考值，根据参考值类型转换
+    2. 布尔值：true/false、yes/no、on/off、1/0
+    3. 数字：整数和浮点数自动识别
+    4. 空值：null、none、空字符串 → None
+    5. 默认：保持字符串类型
+    """
 ```
 
 #### 数据处理配置
@@ -130,8 +213,11 @@ processing:
 ### config.yaml 核心配置项
 
 ```yaml
-# 特殊指标配置
+# 增强的缓存配置
 cache:
+  type: "memory"           # 缓存类型（目前支持 memory）
+  file_path: "./data/cache.json"  # 持久化文件路径
+  sync_interval: 30        # 自动同步间隔（秒）
   special_metrics:
     - co2      # 二氧化碳
     - hcho     # 甲醛
@@ -224,7 +310,41 @@ cache:
 # 代码会自动处理，无需修改逻辑
 ```
 
-#### 2. 修改认证逻辑
+#### 2. 缓存系统扩展
+```python
+# 添加新的缓存类型
+def _init_cache(self):
+    """初始化缓存系统"""
+    cache_config = self.config.get('cache', {})
+    cache_type = cache_config.get('type', 'memory')
+
+    if cache_type == 'memory':
+        # 内存缓存（当前实现）
+        self.cache = MemoryCacheWithPersistence(...)
+    elif cache_type == 'redis':
+        # Redis缓存（可扩展实现）
+        self.cache = RedisCache(...)
+    elif cache_type == 'sqlite':
+        # SQLite缓存（可扩展实现）
+        self.cache = SQLiteCache(...)
+```
+
+#### 3. 线程安全操作指南
+```python
+# 正确的缓存操作方式
+def update_device_data(self, ble_addr, metrics):
+    """线程安全的设备数据更新"""
+    for metric_name, value in metrics.items():
+        # 使用线程安全的API
+        self.cache.update_metric(ble_addr, metric_name, value, time.time())
+
+def get_device_summary(self, ble_addr):
+    """线程安全的设备数据获取"""
+    # 使用线程安全的API
+    return self.cache.get_device_metrics(ble_addr)
+```
+
+#### 4. 修改认证逻辑
 ```python
 def _authenticate(self, request):
     """认证请求 - 可扩展支持更多认证方式"""
@@ -232,7 +352,7 @@ def _authenticate(self, request):
     # 可扩展：JWT、OAuth2、IP白名单等
 ```
 
-#### 3. 添加新的转发目标
+#### 5. 添加新的转发目标
 ```yaml
 forwarder:
   targets:
@@ -241,7 +361,7 @@ forwarder:
       # 可扩展：headers、认证等配置
 ```
 
-#### 4. 使用环境变量覆盖配置
+#### 6. 使用环境变量覆盖配置
 ```bash
 # 开发环境快速配置
 export BRT_PROCESSING__ENABLED=false
@@ -272,10 +392,12 @@ export BRT_FORWARDER__TARGETS__0__URL=https://prod-api.example.com/data
 
 ### 性能优化建议
 
-#### 1. 缓存优化
-- 当前使用JSON文件，可考虑升级为Redis
-- 实现缓存过期机制
-- 添加缓存统计信息
+#### 1. 缓存系统优化（已实现）
+- **内存缓存** - 已实现高性能内存缓存，避免频繁文件I/O
+- **线程安全** - 已实现可重入锁，支持多线程并发访问
+- **智能持久化** - 已实现脏数据标记和定期同步机制
+- **原子性写入** - 已实现临时文件+原子重命名，避免数据损坏
+- **统计信息** - 已实现缓存统计和清理功能
 
 #### 2. 转发优化
 - 考虑并行转发（注意线程安全）
@@ -286,6 +408,19 @@ export BRT_FORWARDER__TARGETS__0__URL=https://prod-api.example.com/data
 - 实现结构化日志（JSON格式）
 - 添加日志聚合和分析
 - 实现日志实时查看接口
+
+#### 4. 缓存系统扩展建议
+```python
+# 可考虑的缓存类型扩展
+class RedisCache:
+    """Redis缓存实现 - 适用于分布式部署"""
+
+class SQLiteCache:
+    """SQLite缓存实现 - 适用于需要复杂查询的场景"""
+
+class MemcachedCache:
+    """Memcached缓存实现 - 适用于高性能缓存场景"""
+```
 
 ## 测试和调试
 
@@ -359,7 +494,24 @@ python test_client.py
 **解决**: 检查 `special_metrics` 配置，确认指标名称正确
 
 **问题**: 缓存文件损坏
-**解决**: 删除 `data/cache.json`，重启服务自动重建
+**解决**: 新的内存缓存系统更稳定，如遇问题可删除 `data/cache.json`，重启服务自动重建
+
+**问题**: 内存使用过高
+**解决**:
+- 检查缓存数据量，考虑调用 `cleanup_expired_data()` 清理过期数据
+- 调整同步间隔：`export BRT_CACHE__SYNC_INTERVAL=60`
+- 监控设备数量和指标数量，考虑数据归档策略
+
+**问题**: 数据不同步到磁盘
+**解决**:
+- 检查后台同步线程日志：`grep "sync\|cache" logs/forwarder.log`
+- 确认程序正常退出，数据会在关闭时强制同步
+- 检查磁盘空间和权限
+
+**问题**: 并发访问异常
+**解决**: 新的缓存系统已实现线程安全，如遇问题请检查：
+- 是否直接操作了缓存文件（应使用API操作）
+- 多进程部署时的文件锁定问题
 
 ### 2. 转发相关问题
 **问题**: 转发失败
