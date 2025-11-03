@@ -20,6 +20,8 @@ import yaml
 from flask import Flask, jsonify, request
 
 
+VERSION = "0.0.1"
+
 class DataForwarder:
     """数据转发服务器主类"""
 
@@ -295,7 +297,7 @@ class DataForwarder:
             uptime = time.time() - getattr(self, '_start_time', time.time())
             return jsonify({
                 "status": "healthy",
-                "version": "1.0.0",
+                "version": VERSION,
                 "uptime": int(uptime)
             }), 200
 
@@ -557,6 +559,7 @@ class DataForwarder:
 
         self._start_time = time.time()
         self.logger.info(f"Data forwarder starting on {host}:{port}")
+        self.logger.info(f"Version: {VERSION}")
 
         try:
             self.app.run(host=host, port=port, debug=debug, threaded=True)
@@ -571,7 +574,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='数据转发服务器')
     parser.add_argument('-c', '--config', default='config.yaml', help='配置文件路径')
-    parser.add_argument('-v', '--version', action='version', version='1.0.0')
+    parser.add_argument('-v', '--version', action='version', version=VERSION)
 
     args = parser.parse_args()
 
