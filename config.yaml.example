@@ -22,6 +22,19 @@ processing:
   enabled: true                      # 是否启用数据处理（默认开启）
                                       # false=直接转发原始数据，但仍更新缓存
 
+# 时间戳配置
+timestamp:
+  reset_on_receive: true            # 是否重置时间戳为接收时间
+                                      # true: 将指定字段的时间戳重置为当前接收时间
+                                      # false: 保持原始时间戳不变
+  reset_fields:                      # 需要重置的时间字段列表
+    - "time"                         # 网关上报时间（根级字段）
+    - "scan_time"                    # 设备扫描时间（设备级字段）
+  add_receive_timestamp: true        # 是否添加接收时间戳字段
+                                      # true: 在数据中添加接收时间戳便于追踪
+                                      # false: 不添加新的时间戳字段
+  receive_timestamp_field: "received_at"  # 接收时间戳字段名
+  
 # 转发配置
 forwarder:
   # 转发目标列表

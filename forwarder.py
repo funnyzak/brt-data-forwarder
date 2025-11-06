@@ -251,9 +251,9 @@ class DataForwarder:
         Args:
             config_path: 配置文件路径
         """
-        self.config = self._load_config(config_path)
         self.app = Flask(__name__)
         self._setup_logging()
+        self.config = self._load_config(config_path)
 
         # 确保必要的目录存在
         Path("./data").mkdir(exist_ok=True)
@@ -424,10 +424,15 @@ class DataForwarder:
 
     def _setup_logging(self):
         """设置日志系统"""
-        log_config = self.config.get('logging', {})
+        # 如果config还没有加载，使用默认配置
+        if hasattr(self, 'config'):
+            log_config = self.config.get('logging', {})
+        else:
+            log_config = {}
 
         # 设置日志级别
-        level = getattr(logging, log_config.get('level', 'INFO').upper())
+        level_name = log_config.get('level', 'INFO')
+        level = getattr(logging, level_name.upper(), logging.INFO)
         logging.basicConfig(level=level)
 
         # 创建 logger
@@ -587,12 +592,40 @@ class DataForwarder:
         processing_config = self.config.get('processing', {})
         processing_enabled = processing_config.get('enabled', True)
 
+        # 时间戳处理
+        timestamp_config = self.config.get('timestamp', {})
+        reset_on_receive = timestamp_config.get('reset_on_receive', False)
+        reset_fields = timestamp_config.get('reset_fields', [])
+        add_receive_timestamp = timestamp_config.get('add_receive_timestamp', True)
+        receive_timestamp_field = timestamp_config.get('receive_timestamp_field', 'received_at')
+
         # 创建处理后的数据副本
-        if processing_enabled:
+        if processing_enabled or reset_on_receive or add_receive_timestamp:
             processed_data = deepcopy(input_data)
         else:
             # 如果不处理数据，直接使用原始数据，但仍需要创建副本用于缓存更新
             processed_data = input_data
+
+        # 时间戳重置处理
+        if reset_on_receive:
+            current_time = int(time.time())
+
+            # 重置根级时间字段
+            if 'time' in reset_fields and 'time' in processed_data:
+                original_time = processed_data['time']
+                processed_data['time'] = current_time
+
+            # 重置设备级时间字段
+            if 'scan_time' in reset_fields:
+                for device in processed_data.get('devices', []):
+                    if 'scan_time' in device:
+                        original_scan_time = device['scan_time']
+                        device['scan_time'] = current_time
+
+        # 添加接收时间戳字段
+        if add_receive_timestamp:
+            current_time = int(time.time())
+            processed_data[receive_timestamp_field] = current_time
 
         # 缓存配置
         cache_config = self.config.get('cache', {})
