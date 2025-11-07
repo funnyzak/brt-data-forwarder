@@ -118,7 +118,7 @@ docker run -d \
   -e BRT_PROCESSING__ENABLED=false \
   -e BRT_FORWARDER__TARGETS__0__URL=http://external-api.com/data \
   -e BRT_LOGGING__LEVEL=INFO \
-  brt-data-forwarder:latest
+  funnyzak/brt-data-forwarder:latest
 ```
 
 **Docker Compose示例**
@@ -126,7 +126,7 @@ docker run -d \
 ```compose
 services:
   brt-data-forwarder:
-    image: registry.cn-beijing.aliyuncs.com/funnyzak/brt-data-forwarder:latest
+    image: funnyzak/brt-data-forwarder:latest
     container_name: brt-data-forwarder
     restart: on-failure
     ports:
